@@ -1,0 +1,214 @@
+#!/usr/bin/env php
+<?php
+/**
+ * 网易云音乐歌单批量下载脚本,可下载VIP歌曲,歌曲有高音质下载时优先下载高音质
+ * @author 拖拖 <863210975@qq.com>
+ * @date 2017-08-02;
+ * --------------------------------------------------------------
+ * Useage:
+ * ./Netease 歌单ID
+ */
+error_reporting(0);
+empty($argv) && die("Resque only run in cli mode\n");
+
+if (empty($argv[1])) {
+    die("Play List can not be null\n");
+}
+//接口地址
+$api         = 'http://music.163.com/api/playlist/detail?id=';
+$downloadUrl = "http://m%u.music.126.net/%s/%s.mp3";
+
+//获取歌单数据
+$playListId = $argv[1];
+$rs         = http_get($api . $playListId);
+
+if (empty($rs)) {
+    die("Request failed\n");
+}
+$rs = json_decode($rs, true);
+if ($rs['code'] != 200) {
+    die("Parse failed\n");
+}
+//获取下载地址,下载至本地
+$playList = $rs['result']['tracks'];
+$total = count($playList);
+foreach ($playList as $key => $value) {
+    $tmp = getSongAlbum($value['album']['id']);
+    // getSongDetail($value['id']);
+    if ($tmp['code'] == 200) {
+        $songKsy = 0;
+        foreach ($tmp['album']['songs'] as $key1 => $value1) {
+            if($value['name']==$value1['name']){
+                $songKsy = $key1;
+            }
+        }
+        $song     = $tmp['album']['songs'][$songKsy];
+        $download = 0;
+        //高音质
+        if (!empty($song['hMusic']['dfsId']) && $download == 0) {
+            $encrypted_song_id = encrypt_id($song['hMusic']['dfsId']);
+            $url               = sprintf($downloadUrl, mt_rand(1, 3), $encrypted_song_id, $song['hMusic']['dfsId']);
+            $url               = str_replace('http://m', 'http://p', $url);
+            echo $song['name'], PHP_EOL, $url, PHP_EOL;
+            if (downRemoteFile($url, './' . $song['name'] . '.mp3')) {
+                $download = 1;
+                echo 'High quality download success', PHP_EOL;
+            } else {
+                echo 'High quality download failed', PHP_EOL;
+            }
+        }
+        //标准音质
+        if (!empty($song['mMusic']['dfsId']) && $download == 0) {
+            $encrypted_song_id = encrypt_id($song['mMusic']['dfsId']);
+            $url               = sprintf($downloadUrl, mt_rand(1, 3), $encrypted_song_id, $song['mMusic']['dfsId']);
+            $url               = str_replace('http://m', 'http://p', $url);
+            echo $song['name'], PHP_EOL, $url, PHP_EOL;
+            if (downRemoteFile($url, './' . $song['name'] . '.mp3')) {
+                $download = 1;
+                echo 'Medium quality download success', PHP_EOL;
+            } else {
+                echo 'Medium quality download failed', PHP_EOL;
+            }
+        }
+        //低音质
+        if (!empty($song['lMusic']['dfsId']) && $download == 0) {
+            $encrypted_song_id = encrypt_id($song['lMusic']['dfsId']);
+            $url               = sprintf($downloadUrl, mt_rand(1, 3), $encrypted_song_id, $song['lMusic']['dfsId']);
+            $url               = str_replace('http://m', 'http://p', $url);
+            echo $song['name'], PHP_EOL, $url, PHP_EOL;
+            if (downRemoteFile($url, './' . $song['name'] . '.mp3')) {
+                $download = 1;
+                echo 'Low quality download success', PHP_EOL;
+            } else {
+                echo 'Low quality download failed', PHP_EOL;
+            }
+        }
+        //低音质
+        if ($download == 0) {
+            $url = $song['mp3Url'];
+            $url = str_replace('http://m', 'http://p', $url);
+            echo $song['name'], PHP_EOL, $url, PHP_EOL;
+            if (downRemoteFile($url, './' . $song['name'] . '.mp3')) {
+                $download = 1;
+                echo 'Low quality download success', PHP_EOL;
+            } else {
+                echo 'Low quality download failed', PHP_EOL;
+            }
+        }
+    } else {
+        echo 'Get album information failed' , PHP_EOL;
+    }
+    echo 'rest : '.($total-1-$key),PHP_EOL,PHP_EOL;
+}
+
+function http_get($url)
+{
+    $oCurl = curl_init();
+    curl_setopt($oCurl, CURLOPT_HTTPHEADER, ['Content-type:text/html', 'Charset=utf8']);
+    if (stripos($url, "https://") !== false) {
+        curl_setopt($oCurl, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($oCurl, CURLOPT_SSL_VERIFYHOST, false);
+        curl_setopt($oCurl, CURLOPT_SSLVERSION, 1);
+    }
+    curl_setopt($oCurl, CURLOPT_URL, $url);
+    // curl_setopt($oCurl, CURLOPT_PROXY, '127.0.0.1:8888');
+    curl_setopt($oCurl, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($oCurl, CURLOPT_COOKIE, 'appver=1.5.0.75771');
+    curl_setopt($oCurl, CURLOPT_REFERER, 'http://music.163.com/');
+    $sContent = curl_exec($oCurl);
+    $aStatus  = curl_getinfo($oCurl);
+    curl_close($oCurl);
+    if (intval($aStatus["http_code"]) == 200) {
+        return $sContent;
+    } else {
+        return false;
+    }
+}
+
+function downRemoteFile($url, $local, $timeout = 10)
+{
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
+    // curl_setopt($ch, CURLOPT_PROXY, '127.0.0.1:8888');
+    ob_start();
+    curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    if ($code != 200) {
+        ob_end_clean();
+        return false;
+    }
+    $content = ob_get_contents();
+    ob_end_clean();
+    $fp = @fopen($local, 'a');
+    fwrite($fp, $content);
+    if (!is_dir('./downloadMusic/')) {
+        mkdir('./downloadMusic/', 0755);
+    }
+    rename($local, './downloadMusic/' . $local);
+    return true;
+}
+
+
+
+/**
+ * 获取歌曲详情
+ * @param  int $songId 歌曲id
+ * @return array 歌曲详情
+ */
+function getSongDetail($songId)
+{
+    $apiUrl = 'http://music.163.com/api/song/detail?id=' . $songId . '&ids=%5B' . $songId . '%5D';
+    return json_decode(http_get($apiUrl), true);
+}
+
+/**
+ * 获取专辑详情
+ * @param  int $albumId 专辑id
+ * @return array 专辑详情
+ */
+function getSongAlbum($albumId)
+{
+    $apiUrl = 'http://music.163.com/api/album/' . $albumId . '?id=' . $albumId;
+    return json_decode(http_get($apiUrl), true);
+}
+
+function BytesToStr($bytes)
+{
+    $str = '';
+    foreach ($bytes as $ch) {
+        $str .= chr($ch);
+    }
+    return $str;
+}
+
+function strToBytes($string)
+{
+    $bytes = array();
+    for ($i = 0; $i < strlen($string); $i++) {
+        $bytes[] = ord($string[$i]);
+    }
+    return $bytes;
+}
+
+/**
+ * 网易云音乐歌曲ID加密函数
+ * @param  string $dfsId 音质ID
+ * @return string 加密值
+ * 参考https://github.com/yanunon/NeteaseCloudMusic/wiki/%E7%BD%91%E6%98%93%E4%BA%91%E9%9F%B3%E4%B9%90API%E5%88%86%E6%9E%90
+ */
+function encrypt_id($dfsId)
+{
+    $str1 = strToBytes('3go8&$8*3*3h0k(2)2');
+    $str2 = strToBytes((string) $dfsId);
+    $len  = count($str2);
+    for ($i = 0; $i < $len; $i++) {
+        $str2[$i] = $str2[$i] ^ $str1[$i % $len];
+    }
+    $encryptStr = base64_encode(md5(BytesToStr($str2), 1));
+    $encryptStr = str_replace('/', '_', $encryptStr);
+    $encryptStr = str_replace('+', '_', $encryptStr);
+    return $encryptStr;
+}
